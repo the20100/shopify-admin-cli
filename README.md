@@ -237,6 +237,18 @@ shopify-admin markets get <id>
 
 ---
 
+### `update` — Self-update
+
+Pull the latest source from GitHub, rebuild, and replace the current binary.
+
+```bash
+shopify-admin update
+```
+
+Requires `git` and `go` to be installed.
+
+---
+
 ## Tips
 
 - **Finding IDs**: Use `--json` and pipe to `jq`:
