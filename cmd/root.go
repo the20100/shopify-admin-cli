@@ -98,13 +98,32 @@ func maskOrEmpty(v string) string {
 	return v[:4] + "..." + v[len(v)-4:]
 }
 
+// resolveEnv returns the value of the first non-empty environment variable from the given names.
+func resolveEnv(names ...string) string {
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // resolveCredentials returns the shop domain and access token from env or config.
 func resolveCredentials() (string, string, error) {
-	envShop := os.Getenv("SHOPIFY_SHOP")
-	envToken := os.Getenv("SHOPIFY_ACCESS_TOKEN")
+	// 1. Env vars (try all aliases)
+	envToken := resolveEnv(
+		"SHOPIFY_ACCESS_TOKEN", "SHOPIFY_TOKEN", "SHOPIFY_API_TOKEN", "SHOPIFY_API_KEY",
+		"SHOPIFY_KEY", "SHOPIFY_API", "API_KEY_SHOPIFY", "API_SHOPIFY",
+		"SHOPIFY_SECRET_KEY", "SHOPIFY_API_SECRET", "SHOPIFY_SECRET", "SHOPIFY_SK", "SK_SHOPIFY",
+	)
+	envShop := resolveEnv(
+		"SHOPIFY_SHOP", "SHOPIFY_STORE", "SHOPIFY_DOMAIN", "SHOPIFY_SHOP_URL", "SHOPIFY_STORE_URL", "SHOP_DOMAIN",
+	)
 	if envShop != "" && envToken != "" {
 		return envShop, envToken, nil
 	}
+
+	// 2. Config file
 	var err error
 	cfg, err = config.Load()
 	if err != nil {
