@@ -117,10 +117,10 @@ Examples:
 
 // ── ShopifyQL queries ─────────────────────────────────────────────────────────
 
-// ltvQuerySales runs a ShopifyQL query to fetch SUM(net_sales) and SUM(tax).
+// ltvQuerySales runs a ShopifyQL query to fetch SUM(net_sales) and SUM(taxes).
 func ltvQuerySales(start, end string) (netSales, tax float64, err error) {
 	q := fmt.Sprintf(
-		"FROM sales SHOW SUM(net_sales), SUM(tax) SINCE %s UNTIL %s",
+		"FROM sales SHOW SUM(net_sales), SUM(taxes) SINCE %s UNTIL %s",
 		start, end,
 	)
 	res, err := client.RunShopifyQL(q)
@@ -135,7 +135,7 @@ func ltvQuerySales(start, end string) (netSales, tax float64, err error) {
 	}
 	row := res.TableData.Rows[0]
 	ns, _ := qlFloat(row, res.TableData.Columns, "net_sales")
-	t, _ := qlFloat(row, res.TableData.Columns, "tax")
+	t, _ := qlFloat(row, res.TableData.Columns, "taxes")
 	return ns, t, nil
 }
 
