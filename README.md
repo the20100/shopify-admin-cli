@@ -17,23 +17,48 @@ Requires Go 1.22+.
 
 ## Authentication
 
-You need a Shopify store and an Admin API access token.
+Since January 2026, Shopify no longer issues permanent tokens from the admin UI. You need a **custom app** created in the [Shopify Partners dashboard](https://partners.shopify.com) or [Dev Dashboard](https://dev.shopify.com) and its **Client ID + Client Secret**.
 
-**To get an access token:**
-1. Go to your Shopify Admin → Settings → Apps and sales channels
-2. Click "Develop apps" → Create an app
-3. Configure Admin API scopes (read_products, write_products, read_orders, etc.)
-4. Install the app and copy the Admin API access token
+### OAuth flow (recommended)
 
-**Set credentials:**
 ```bash
-# Save to config file (recommended)
-shopify-admin auth setup mystore.myshopify.com shpat_xxxxx
+# 1. Save your app's Client ID and Client Secret
+shopify-admin auth configure <client-id> <client-secret>
 
-# Or use environment variables
-export SHOPIFY_SHOP=mystore.myshopify.com
-export SHOPIFY_ACCESS_TOKEN=shpat_xxxxx
+# 2. Install the app and obtain an API token
+#    Use --no-browser in remote/headless environments
+shopify-admin auth login --shop mystore --no-browser
+shopify-admin auth login --shop mystore          # opens browser automatically
 ```
+
+**How `--no-browser` works:**
+1. The CLI prints a Shopify authorization URL — open it in any browser
+2. Approve the app in the Shopify admin
+3. The browser tries to redirect to `http://localhost/callback?code=...` (will fail — that's expected)
+4. Copy the full URL from the browser address bar and paste it into the CLI prompt
+5. Done — the CLI exchanges the code and fetches a real API token
+
+**Tokens auto-refresh silently.** Once the app is installed, every command checks the token's expiry and refreshes it via the Client Credentials Grant when needed (tokens last ~24 h). No manual re-authentication required.
+
+### Manual token (legacy)
+
+```bash
+shopify-admin auth setup mystore.myshopify.com <access-token>
+```
+
+### Environment variables
+
+```bash
+export SHOPIFY_SHOP=mystore.myshopify.com
+export SHOPIFY_ACCESS_TOKEN=<token>
+```
+
+> **Note:** env vars take priority over the config file and **bypass auto-refresh**. Remove them (`unset SHOPIFY_SHOP SHOPIFY_ACCESS_TOKEN`) if you want the OAuth flow to handle tokens automatically.
+
+Credentials are stored in:
+- macOS: `~/Library/Application Support/shopify-admin/config.json`
+- Linux: `~/.config/shopify-admin/config.json`
+- Windows: `%AppData%\shopify-admin\config.json`
 
 ## Global Flags
 
@@ -56,9 +81,17 @@ shopify-admin info
 
 ### `auth`
 ```bash
-shopify-admin auth setup <shop> <access-token>  # Save credentials
-shopify-admin auth status                        # Show auth status
-shopify-admin auth logout                        # Remove saved credentials
+# OAuth flow (recommended)
+shopify-admin auth configure <client-id> <client-secret>   # Save app credentials
+shopify-admin auth login --shop <shop> --no-browser        # Install app + get token (remote)
+shopify-admin auth login --shop <shop>                     # Install app + get token (local)
+
+# Manual / legacy
+shopify-admin auth setup <shop> <access-token>             # Save a token directly
+
+# Utilities
+shopify-admin auth status                                  # Show active credential source
+shopify-admin auth logout                                  # Remove all saved credentials
 ```
 
 ---
@@ -258,5 +291,6 @@ Requires `git` and `go` to be installed.
   ```
 - **Pagination**: Use `--after CURSOR` with the cursor shown at the bottom of list output
 - **Search**: All list commands support `--query` with Shopify's search syntax
-- **Env vars**: Set `SHOPIFY_SHOP` and `SHOPIFY_ACCESS_TOKEN` to bypass stored config
+- **401 errors**: Run `shopify-admin auth status` — if it shows `env vars`, an old token is overriding the config. Fix with `unset SHOPIFY_ACCESS_TOKEN SHOPIFY_SHOP`
+- **Env vars**: Set `SHOPIFY_SHOP` and `SHOPIFY_ACCESS_TOKEN` to bypass stored config (note: this disables auto-refresh)
 - **API version**: Uses Shopify Admin API `2026-01`
