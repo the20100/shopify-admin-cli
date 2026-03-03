@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -110,8 +111,9 @@ After configuring, run:
 // ── auth login ────────────────────────────────────────────────────────────────
 
 var (
-	loginShop   string
-	loginScopes string
+	loginShop      string
+	loginScopes    string
+	loginNoBrowser bool
 )
 
 var authLoginCmd = &cobra.Command{
@@ -122,18 +124,20 @@ var authLoginCmd = &cobra.Command{
 Requires app credentials configured via:
   shopify-admin auth configure <client-id> <client-secret>
 
-Steps:
+Default (browser) mode:
   1. A local HTTP server is started to capture the OAuth callback.
   2. Your browser opens to Shopify's authorization page.
-  3. You approve the app in Shopify admin.
-  4. Shopify redirects back; the CLI exchanges the code for an access token.
-  5. The token is saved to your config file.
+  3. You approve the app; Shopify redirects back automatically.
+  4. The CLI exchanges the code for an access token and saves it.
 
-IMPORTANT: you must add the following as an allowed redirect URI in your
-Shopify app settings (Partners dashboard or custom app config):
-  http://localhost:<port>/callback
+  IMPORTANT: register the printed redirect URI in your app settings.
 
-The CLI will print the exact redirect URI before opening the browser.`,
+--no-browser mode (remote / headless environments):
+  1. The CLI prints the authorization URL — open it in any browser.
+  2. After you approve, Shopify redirects to http://localhost/callback?...
+     which will fail in your browser (that's expected).
+  3. Copy the full URL from your browser's address bar and paste it here.
+  4. The CLI extracts the code, exchanges it, and saves the token.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := config.Load()
 		if err != nil {
@@ -156,14 +160,6 @@ The CLI will print the exact redirect URI before opening the browser.`,
 
 		scopes := loginScopes
 
-		// Start a local HTTP server on a random available port.
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return fmt.Errorf("starting local server: %w", err)
-		}
-		port := listener.Addr().(*net.TCPAddr).Port
-		redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
-
 		// Generate a random state nonce to guard against CSRF.
 		stateBytes := make([]byte, 16)
 		if _, err := rand.Read(stateBytes); err != nil {
@@ -171,88 +167,165 @@ The CLI will print the exact redirect URI before opening the browser.`,
 		}
 		state := hex.EncodeToString(stateBytes)
 
-		// Build the Shopify OAuth authorization URL.
-		authURL := fmt.Sprintf(
-			"https://%s/admin/oauth/authorize?client_id=%s&scope=%s&redirect_uri=%s&state=%s",
-			shop,
-			url.QueryEscape(c.ClientID),
-			url.QueryEscape(scopes),
-			url.QueryEscape(redirectURI),
-			state,
-		)
-
-		type oauthResult struct {
-			token string
-			err   error
+		if loginNoBrowser {
+			return loginManual(c, shop, scopes, state)
 		}
-		ch := make(chan oauthResult, 1)
-
-		mux := http.NewServeMux()
-		srv := &http.Server{Handler: mux}
-
-		mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-			q := r.URL.Query()
-
-			if q.Get("state") != state {
-				ch <- oauthResult{err: fmt.Errorf("state mismatch: possible CSRF attack")}
-				http.Error(w, "State mismatch", http.StatusBadRequest)
-				return
-			}
-
-			if err := verifyHMAC(q, c.ClientSecret); err != nil {
-				ch <- oauthResult{err: fmt.Errorf("HMAC validation failed: %w", err)}
-				http.Error(w, "HMAC validation failed", http.StatusBadRequest)
-				return
-			}
-
-			code := q.Get("code")
-			if code == "" {
-				ch <- oauthResult{err: fmt.Errorf("no authorization code in callback")}
-				http.Error(w, "Missing code", http.StatusBadRequest)
-				return
-			}
-
-			callbackShop := q.Get("shop")
-			token, err := exchangeAuthCode(callbackShop, c.ClientID, c.ClientSecret, code)
-			if err != nil {
-				ch <- oauthResult{err: fmt.Errorf("exchanging code: %w", err)}
-				fmt.Fprintf(w, "<html><body><h2>Authentication failed</h2><p>%s</p><p>You can close this tab.</p></body></html>", err)
-				return
-			}
-
-			ch <- oauthResult{token: token}
-			fmt.Fprintf(w, "<html><body><h2>Authentication successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>")
-		})
-
-		go srv.Serve(listener) //nolint:errcheck
-
-		fmt.Printf("Redirect URI for your app settings:\n  %s\n\n", redirectURI)
-		fmt.Println("Opening browser for Shopify authorization...")
-		fmt.Printf("If the browser does not open, visit:\n  %s\n\n", authURL)
-		openBrowser(authURL)
-		fmt.Println("Waiting for authorization (5 min timeout)...")
-
-		select {
-		case res := <-ch:
-			srv.Close()
-			if res.err != nil {
-				return res.err
-			}
-			c.Shop = shop
-			c.AccessToken = res.token
-			if err := config.Save(c); err != nil {
-				return fmt.Errorf("saving token: %w", err)
-			}
-			fmt.Printf("\nAuthenticated successfully!\n")
-			fmt.Printf("Shop:  %s\n", shop)
-			fmt.Printf("Token: %s\n", maskOrEmpty(res.token))
-			return nil
-
-		case <-time.After(5 * time.Minute):
-			srv.Close()
-			return fmt.Errorf("timed out waiting for Shopify to redirect back")
-		}
+		return loginWithServer(c, shop, scopes, state)
 	},
+}
+
+// loginWithServer is the default browser flow: starts a local HTTP server,
+// opens the browser, and waits for Shopify's redirect callback.
+func loginWithServer(c *config.Config, shop, scopes, state string) error {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("starting local server: %w", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	redirectURI := fmt.Sprintf("http://localhost:%d/callback", port)
+
+	authURL := fmt.Sprintf(
+		"https://%s/admin/oauth/authorize?client_id=%s&scope=%s&redirect_uri=%s&state=%s",
+		shop,
+		url.QueryEscape(c.ClientID),
+		url.QueryEscape(scopes),
+		url.QueryEscape(redirectURI),
+		state,
+	)
+
+	type oauthResult struct {
+		token string
+		err   error
+	}
+	ch := make(chan oauthResult, 1)
+
+	mux := http.NewServeMux()
+	srv := &http.Server{Handler: mux}
+
+	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+
+		if q.Get("state") != state {
+			ch <- oauthResult{err: fmt.Errorf("state mismatch: possible CSRF attack")}
+			http.Error(w, "State mismatch", http.StatusBadRequest)
+			return
+		}
+		if err := verifyHMAC(q, c.ClientSecret); err != nil {
+			ch <- oauthResult{err: fmt.Errorf("HMAC validation failed: %w", err)}
+			http.Error(w, "HMAC validation failed", http.StatusBadRequest)
+			return
+		}
+		code := q.Get("code")
+		if code == "" {
+			ch <- oauthResult{err: fmt.Errorf("no authorization code in callback")}
+			http.Error(w, "Missing code", http.StatusBadRequest)
+			return
+		}
+		token, err := exchangeAuthCode(q.Get("shop"), c.ClientID, c.ClientSecret, code)
+		if err != nil {
+			ch <- oauthResult{err: fmt.Errorf("exchanging code: %w", err)}
+			fmt.Fprintf(w, "<html><body><h2>Authentication failed</h2><p>%s</p><p>You can close this tab.</p></body></html>", err)
+			return
+		}
+		ch <- oauthResult{token: token}
+		fmt.Fprintf(w, "<html><body><h2>Authentication successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>")
+	})
+
+	go srv.Serve(listener) //nolint:errcheck
+
+	fmt.Printf("Redirect URI for your app settings:\n  %s\n\n", redirectURI)
+	fmt.Println("Opening browser for Shopify authorization...")
+	fmt.Printf("If the browser does not open, visit:\n  %s\n\n", authURL)
+	openBrowser(authURL)
+	fmt.Println("Waiting for authorization (5 min timeout)...")
+
+	select {
+	case res := <-ch:
+		srv.Close()
+		if res.err != nil {
+			return res.err
+		}
+		return saveToken(c, shop, res.token)
+	case <-time.After(5 * time.Minute):
+		srv.Close()
+		return fmt.Errorf("timed out waiting for Shopify to redirect back")
+	}
+}
+
+// loginManual is the --no-browser flow for remote/headless environments.
+// It prints the auth URL, then prompts the user to paste back the full
+// callback URL that Shopify redirected to (which fails in the browser but
+// whose URL is visible in the address bar).
+func loginManual(c *config.Config, shop, scopes, state string) error {
+	// Use a fixed placeholder redirect URI — the exact value doesn't matter
+	// for parsing, but it must be registered in the app settings.
+	redirectURI := "http://localhost/callback"
+
+	authURL := fmt.Sprintf(
+		"https://%s/admin/oauth/authorize?client_id=%s&scope=%s&redirect_uri=%s&state=%s",
+		shop,
+		url.QueryEscape(c.ClientID),
+		url.QueryEscape(scopes),
+		url.QueryEscape(redirectURI),
+		state,
+	)
+
+	fmt.Printf("Redirect URI to register in your app settings:\n  %s\n\n", redirectURI)
+	fmt.Printf("Open this URL in your browser:\n  %s\n\n", authURL)
+	fmt.Println("After approving, your browser will redirect to http://localhost/callback?...")
+	fmt.Println("That page will fail to load — that's expected.")
+	fmt.Println("Copy the full URL from your browser's address bar and paste it below.\n")
+	fmt.Print("Callback URL: ")
+
+	reader := bufio.NewReader(os.Stdin)
+	raw, err := reader.ReadString('\n')
+	if err != nil {
+		return fmt.Errorf("reading input: %w", err)
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fmt.Errorf("no URL provided")
+	}
+
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("parsing callback URL: %w", err)
+	}
+	q := parsed.Query()
+
+	if q.Get("state") != state {
+		return fmt.Errorf("state mismatch: the URL does not belong to this login session")
+	}
+	if err := verifyHMAC(q, c.ClientSecret); err != nil {
+		return fmt.Errorf("HMAC validation failed: %w", err)
+	}
+	code := q.Get("code")
+	if code == "" {
+		return fmt.Errorf("no authorization code found in the URL")
+	}
+	callbackShop := q.Get("shop")
+	if callbackShop == "" {
+		callbackShop = shop
+	}
+
+	token, err := exchangeAuthCode(callbackShop, c.ClientID, c.ClientSecret, code)
+	if err != nil {
+		return fmt.Errorf("exchanging code: %w", err)
+	}
+	return saveToken(c, shop, token)
+}
+
+// saveToken writes the shop + access token to config and prints confirmation.
+func saveToken(c *config.Config, shop, token string) error {
+	c.Shop = shop
+	c.AccessToken = token
+	if err := config.Save(c); err != nil {
+		return fmt.Errorf("saving token: %w", err)
+	}
+	fmt.Printf("\nAuthenticated successfully!\n")
+	fmt.Printf("Shop:  %s\n", shop)
+	fmt.Printf("Token: %s\n", maskOrEmpty(token))
+	return nil
 }
 
 // ── auth status ───────────────────────────────────────────────────────────────
@@ -394,6 +467,7 @@ func openBrowser(rawURL string) {
 func init() {
 	authLoginCmd.Flags().StringVar(&loginShop, "shop", "", "Shopify shop domain (e.g. mystore or mystore.myshopify.com)")
 	authLoginCmd.Flags().StringVar(&loginScopes, "scopes", defaultScopes, "OAuth scopes to request")
+	authLoginCmd.Flags().BoolVar(&loginNoBrowser, "no-browser", false, "Print the auth URL and prompt for the callback URL instead of opening a browser (use in remote/headless environments)")
 
 	authCmd.AddCommand(authSetupCmd, authConfigureCmd, authLoginCmd, authStatusCmd, authLogoutCmd)
 	rootCmd.AddCommand(authCmd)
