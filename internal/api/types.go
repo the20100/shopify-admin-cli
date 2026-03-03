@@ -562,8 +562,8 @@ type ShopifyQLResult struct {
 }
 
 type ShopifyQLTable struct {
-	Columns []ShopifyQLColumn `json:"columns"`
-	Rows    [][]string        `json:"rows"`
+	Columns []ShopifyQLColumn    `json:"columns"`
+	Rows    []map[string]string  `json:"rows"`
 }
 
 type ShopifyQLColumn struct {

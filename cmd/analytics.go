@@ -19,16 +19,17 @@ var analyticsQueryCmd = &cobra.Command{
 	Long: `Execute a ShopifyQL query against your store's analytics data.
 
 ShopifyQL syntax examples:
-  FROM sales SHOW SUM(net_sales) SINCE -30d UNTIL today
-  FROM sales SHOW SUM(net_sales) GROUP BY month SINCE -6m UNTIL today
+  FROM sales SHOW net_sales SINCE -30d UNTIL today
+  FROM sales SHOW net_sales GROUP BY month SINCE -6m UNTIL today
   FROM sessions SHOW sessions GROUP BY device_type SINCE -7d UNTIL today
-  FROM products SHOW SUM(net_quantity) AS units_sold ORDER BY units_sold DESC SINCE -30d
+  FROM sales SHOW net_sales, taxes, customers SINCE -1y UNTIL yesterday
 
+Note: ShopifyQL pre-aggregates metrics — no SUM()/COUNT() functions.
 Requires the 'read_reports' access scope on your access token.
 
 Examples:
-  shopify-admin analytics query "FROM sales SHOW SUM(net_sales) SINCE -30d UNTIL today"
-  shopify-admin analytics query "FROM orders SHOW COUNT(order_id) GROUP BY day SINCE -7d" --json`,
+  shopify-admin analytics query "FROM sales SHOW net_sales SINCE -30d UNTIL today"
+  shopify-admin analytics query "FROM sales SHOW net_sales GROUP BY month SINCE -6m" --json`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		result, err := client.RunShopifyQL(args[0])
@@ -45,16 +46,25 @@ Examples:
 			fmt.Println("No data returned.")
 			return nil
 		}
-		// Build headers from column definitions
-		headers := make([]string, len(result.TableData.Columns))
-		for i, col := range result.TableData.Columns {
+		// Build headers and convert map rows to ordered [][]string for PrintTable.
+		cols := result.TableData.Columns
+		headers := make([]string, len(cols))
+		for i, col := range cols {
 			name := col.DisplayName
 			if name == "" {
 				name = col.Name
 			}
 			headers[i] = strings.ToUpper(name)
 		}
-		output.PrintTable(headers, result.TableData.Rows)
+		tableRows := make([][]string, len(result.TableData.Rows))
+		for i, row := range result.TableData.Rows {
+			cells := make([]string, len(cols))
+			for j, col := range cols {
+				cells[j] = row[col.Name]
+			}
+			tableRows[i] = cells
+		}
+		output.PrintTable(headers, tableRows)
 		fmt.Printf("\n(%d rows)\n", len(result.TableData.Rows))
 		return nil
 	},

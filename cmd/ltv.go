@@ -130,9 +130,9 @@ func ltvQueryAll(start, end string) (netSales, taxes float64, customers int64, e
 		return 0, 0, 0, nil
 	}
 	row := res.TableData.Rows[0]
-	ns, _ := qlFloat(row, res.TableData.Columns, "net_sales")
-	t, _ := qlFloat(row, res.TableData.Columns, "taxes")
-	c, _ := qlInt(row, res.TableData.Columns, "customers")
+	ns, _ := qlFloat(row, "net_sales")
+	t, _ := qlFloat(row, "taxes")
+	c, _ := qlInt(row, "customers")
 	return ns, t, c, nil
 }
 
@@ -142,43 +142,29 @@ func qlErrors(res *api.ShopifyQLResult) string {
 	return strings.Join(res.ParseErrors, "; ")
 }
 
-// qlFloat finds a column by partial name match and returns its value as float64.
-func qlFloat(row []string, cols []api.ShopifyQLColumn, name string) (float64, bool) {
-	for i, col := range cols {
-		if i >= len(row) {
-			break
-		}
-		if colMatches(col, name) {
-			v := strings.TrimSpace(strings.ReplaceAll(row[i], ",", ""))
-			if f, err := strconv.ParseFloat(v, 64); err == nil {
-				return f, true
-			}
-		}
+// qlFloat looks up a key directly in the row map and parses it as float64.
+func qlFloat(row map[string]string, name string) (float64, bool) {
+	v, ok := row[name]
+	if !ok {
+		return 0, false
+	}
+	v = strings.TrimSpace(strings.ReplaceAll(v, ",", ""))
+	if f, err := strconv.ParseFloat(v, 64); err == nil {
+		return f, true
 	}
 	return 0, false
 }
 
-// qlInt finds a column by any of the given name hints and returns int64.
-func qlInt(row []string, cols []api.ShopifyQLColumn, names ...string) (int64, bool) {
+// qlInt looks up any of the given keys in the row map and parses as int64.
+func qlInt(row map[string]string, names ...string) (int64, bool) {
 	for _, name := range names {
-		for i, col := range cols {
-			if i >= len(row) {
-				break
-			}
-			if colMatches(col, name) {
-				if n, err := qlParseInt(row[i]); err == nil {
-					return n, true
-				}
+		if v, ok := row[name]; ok {
+			if n, err := qlParseInt(v); err == nil {
+				return n, true
 			}
 		}
 	}
 	return 0, false
-}
-
-func colMatches(col api.ShopifyQLColumn, name string) bool {
-	n := strings.ToLower(name)
-	return strings.Contains(strings.ToLower(col.Name), n) ||
-		strings.Contains(strings.ToLower(col.DisplayName), n)
 }
 
 func qlParseInt(s string) (int64, error) {
