@@ -35,8 +35,8 @@ Examples:
 		if err != nil {
 			return err
 		}
-		if errStr := strings.TrimSpace(result.ParseErrors); errStr != "" {
-			return fmt.Errorf("ShopifyQL parse errors: %s", errStr)
+		if len(result.ParseErrors) > 0 {
+			return fmt.Errorf("ShopifyQL parse errors: %s", strings.Join(result.ParseErrors, "; "))
 		}
 		if output.IsJSON(cmd) {
 			return output.PrintJSON(result, output.IsPretty(cmd))

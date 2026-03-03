@@ -544,7 +544,7 @@ type MarketConnection struct {
 // ---- Analytics ----
 
 type ShopifyQLResult struct {
-	ParseErrors string          `json:"parseErrors"`
+	ParseErrors []string        `json:"parseErrors"`
 	TableData   *ShopifyQLTable `json:"tableData"`
 }
 
