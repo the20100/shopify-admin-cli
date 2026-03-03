@@ -77,14 +77,8 @@ Examples:
 		startStr := start.Format("2006-01-02")
 		endStr := end.Format("2006-01-02")
 
-		fmt.Printf("Querying sales %s → %s…\n", startStr, endStr)
-		netSales, tax, err := ltvQuerySales(startStr, endStr)
-		if err != nil {
-			return err
-		}
-
-		fmt.Println("Querying paying customers…")
-		customers, err := ltvQueryCustomers(startStr, endStr)
+		fmt.Printf("Querying %s → %s…\n", startStr, endStr)
+		netSales, taxes, customers, err := ltvQueryAll(startStr, endStr)
 		if err != nil {
 			return err
 		}
@@ -92,7 +86,7 @@ Examples:
 			return fmt.Errorf("no paying customers found for %s → %s", startStr, endStr)
 		}
 
-		netRevenue := netSales - tax
+		netRevenue := netSales - taxes
 		result := LTVResult{
 			Period: LTVPeriod{
 				Start:         startStr,
@@ -101,7 +95,7 @@ Examples:
 				Period:        ltvPeriod,
 			},
 			NetSales:   round2(netSales),
-			Tax:        round2(tax),
+			Tax:        round2(taxes),
 			NetRevenue: round2(netRevenue),
 			Customers:  customers,
 			LTV:        round2(netRevenue / float64(customers)),
@@ -117,54 +111,29 @@ Examples:
 
 // ── ShopifyQL queries ─────────────────────────────────────────────────────────
 
-// ltvQuerySales runs a ShopifyQL query to fetch SUM(net_sales) and SUM(taxes).
-func ltvQuerySales(start, end string) (netSales, tax float64, err error) {
+// ltvQueryAll fetches net_sales, taxes, and unique paying customers in one
+// ShopifyQL query against the sales table.
+// ShopifyQL pre-aggregates metrics — no SUM()/COUNT() functions exist.
+func ltvQueryAll(start, end string) (netSales, taxes float64, customers int64, err error) {
 	q := fmt.Sprintf(
-		"FROM sales SHOW SUM(net_sales), SUM(taxes) SINCE %s UNTIL %s",
+		"FROM sales SHOW net_sales, taxes, customers SINCE %s UNTIL %s",
 		start, end,
 	)
 	res, err := client.RunShopifyQL(q)
 	if err != nil {
-		return 0, 0, fmt.Errorf("sales query: %w", err)
+		return 0, 0, 0, fmt.Errorf("sales query: %w", err)
 	}
 	if e := qlErrors(res); e != "" {
-		return 0, 0, fmt.Errorf("ShopifyQL (sales): %s", e)
+		return 0, 0, 0, fmt.Errorf("ShopifyQL: %s", e)
 	}
 	if res.TableData == nil || len(res.TableData.Rows) == 0 {
-		return 0, 0, nil
+		return 0, 0, 0, nil
 	}
 	row := res.TableData.Rows[0]
 	ns, _ := qlFloat(row, res.TableData.Columns, "net_sales")
 	t, _ := qlFloat(row, res.TableData.Columns, "taxes")
-	return ns, t, nil
-}
-
-// ltvQueryCustomers runs a ShopifyQL query to count unique paying customers.
-func ltvQueryCustomers(start, end string) (int64, error) {
-	q := fmt.Sprintf(
-		"FROM customers SHOW COUNT(customer_id) SINCE %s UNTIL %s",
-		start, end,
-	)
-	res, err := client.RunShopifyQL(q)
-	if err != nil {
-		return 0, fmt.Errorf("customers query: %w", err)
-	}
-	if e := qlErrors(res); e != "" {
-		return 0, fmt.Errorf("ShopifyQL (customers): %s", e)
-	}
-	if res.TableData == nil || len(res.TableData.Rows) == 0 {
-		return 0, nil
-	}
-	row := res.TableData.Rows[0]
-	if len(row) == 0 {
-		return 0, nil
-	}
-	// Try each column; fall back to first column if no named match.
-	if n, ok := qlInt(row, res.TableData.Columns, "customer_id", "customers", "count"); ok {
-		return n, nil
-	}
-	// Last resort: first cell.
-	return qlParseInt(row[0])
+	c, _ := qlInt(row, res.TableData.Columns, "customers")
+	return ns, t, c, nil
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
