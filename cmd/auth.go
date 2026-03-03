@@ -221,9 +221,16 @@ func loginWithServer(c *config.Config, shop, scopes, state string) error {
 			http.Error(w, "Missing code", http.StatusBadRequest)
 			return
 		}
-		tr, err := exchangeAuthCode(q.Get("shop"), c.ClientID, c.ClientSecret, code)
-		if err != nil {
+		// Exchange auth code to complete the app installation.
+		if _, err := exchangeAuthCode(q.Get("shop"), c.ClientID, c.ClientSecret, code); err != nil {
 			ch <- oauthResult{err: fmt.Errorf("exchanging code: %w", err)}
+			fmt.Fprintf(w, "<html><body><h2>Authentication failed</h2><p>%s</p><p>You can close this tab.</p></body></html>", err)
+			return
+		}
+		// Fetch the actual Admin API token via Client Credentials Grant.
+		tr, err := ClientCredentialsGrant(q.Get("shop"), c.ClientID, c.ClientSecret)
+		if err != nil {
+			ch <- oauthResult{err: fmt.Errorf("fetching API token: %w", err)}
 			fmt.Fprintf(w, "<html><body><h2>Authentication failed</h2><p>%s</p><p>You can close this tab.</p></body></html>", err)
 			return
 		}
@@ -308,9 +315,18 @@ func loginManual(c *config.Config, shop, scopes, state string) error {
 		callbackShop = shop
 	}
 
-	tr, err := exchangeAuthCode(callbackShop, c.ClientID, c.ClientSecret, code)
-	if err != nil {
+	// Exchange the auth code to complete the app installation.
+	// The token returned here (shpc_) is a session token, not an Admin API token.
+	if _, err := exchangeAuthCode(callbackShop, c.ClientID, c.ClientSecret, code); err != nil {
 		return fmt.Errorf("exchanging code: %w", err)
+	}
+
+	// Now that the app is installed, obtain the actual Admin API token via
+	// the Client Credentials Grant. This is the token that works with the API.
+	fmt.Println("App installed. Fetching Admin API token via client credentials...")
+	tr, err := ClientCredentialsGrant(shop, c.ClientID, c.ClientSecret)
+	if err != nil {
+		return fmt.Errorf("fetching API token: %w", err)
 	}
 	return saveToken(c, shop, tr)
 }

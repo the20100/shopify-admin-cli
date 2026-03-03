@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -134,9 +135,11 @@ func resolveCredentials() (string, string, error) {
 	}
 
 	// 3. Auto-refresh via Client Credentials Grant when possible.
-	//    Triggered when: token is missing, or it expires within 5 minutes.
+	//    Triggered when: token is missing, expires within 5 minutes, or is an
+	//    online session token (shpc_) which cannot be used with the Admin API.
 	if cfg.ClientID != "" && cfg.ClientSecret != "" && cfg.Shop != "" {
 		needsRefresh := cfg.AccessToken == "" ||
+			strings.HasPrefix(cfg.AccessToken, "shpc_") ||
 			(cfg.TokenExpiresAt > 0 && time.Now().Unix() >= cfg.TokenExpiresAt-300)
 		if needsRefresh {
 			tr, err := ClientCredentialsGrant(cfg.Shop, cfg.ClientID, cfg.ClientSecret)
