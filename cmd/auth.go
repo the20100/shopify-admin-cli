@@ -194,8 +194,8 @@ func loginWithServer(c *config.Config, shop, scopes, state string) error {
 	)
 
 	type oauthResult struct {
-		token string
-		err   error
+		tr  *tokenResponse
+		err error
 	}
 	ch := make(chan oauthResult, 1)
 
@@ -221,13 +221,13 @@ func loginWithServer(c *config.Config, shop, scopes, state string) error {
 			http.Error(w, "Missing code", http.StatusBadRequest)
 			return
 		}
-		token, err := exchangeAuthCode(q.Get("shop"), c.ClientID, c.ClientSecret, code)
+		tr, err := exchangeAuthCode(q.Get("shop"), c.ClientID, c.ClientSecret, code)
 		if err != nil {
 			ch <- oauthResult{err: fmt.Errorf("exchanging code: %w", err)}
 			fmt.Fprintf(w, "<html><body><h2>Authentication failed</h2><p>%s</p><p>You can close this tab.</p></body></html>", err)
 			return
 		}
-		ch <- oauthResult{token: token}
+		ch <- oauthResult{tr: tr}
 		fmt.Fprintf(w, "<html><body><h2>Authentication successful!</h2><p>You can close this tab and return to the terminal.</p></body></html>")
 	})
 
@@ -245,7 +245,7 @@ func loginWithServer(c *config.Config, shop, scopes, state string) error {
 		if res.err != nil {
 			return res.err
 		}
-		return saveToken(c, shop, res.token)
+		return saveToken(c, shop, res.tr)
 	case <-time.After(5 * time.Minute):
 		srv.Close()
 		return fmt.Errorf("timed out waiting for Shopify to redirect back")
@@ -308,23 +308,31 @@ func loginManual(c *config.Config, shop, scopes, state string) error {
 		callbackShop = shop
 	}
 
-	token, err := exchangeAuthCode(callbackShop, c.ClientID, c.ClientSecret, code)
+	tr, err := exchangeAuthCode(callbackShop, c.ClientID, c.ClientSecret, code)
 	if err != nil {
 		return fmt.Errorf("exchanging code: %w", err)
 	}
-	return saveToken(c, shop, token)
+	return saveToken(c, shop, tr)
 }
 
-// saveToken writes the shop + access token to config and prints confirmation.
-func saveToken(c *config.Config, shop, token string) error {
+// saveToken writes shop + token (+ optional expiry) to config and prints confirmation.
+func saveToken(c *config.Config, shop string, tr *tokenResponse) error {
 	c.Shop = shop
-	c.AccessToken = token
+	c.AccessToken = tr.AccessToken
+	if tr.ExpiresIn > 0 {
+		c.TokenExpiresAt = time.Now().Unix() + int64(tr.ExpiresIn)
+	} else {
+		c.TokenExpiresAt = 0 // no expiry (permanent offline token)
+	}
 	if err := config.Save(c); err != nil {
 		return fmt.Errorf("saving token: %w", err)
 	}
 	fmt.Printf("\nAuthenticated successfully!\n")
 	fmt.Printf("Shop:  %s\n", shop)
-	fmt.Printf("Token: %s\n", maskOrEmpty(token))
+	fmt.Printf("Token: %s\n", maskOrEmpty(tr.AccessToken))
+	if tr.ExpiresIn > 0 {
+		fmt.Printf("Expires: in ~%d hours (auto-refreshed on next use)\n", tr.ExpiresIn/3600)
+	}
 	return nil
 }
 
@@ -413,40 +421,64 @@ func verifyHMAC(q url.Values, secret string) error {
 	return nil
 }
 
-// exchangeAuthCode exchanges a Shopify OAuth authorization code for an access token.
-func exchangeAuthCode(shop, clientID, clientSecret, code string) (string, error) {
-	endpoint := fmt.Sprintf("https://%s/admin/oauth/access_token", shop)
+// tokenResponse is the shape of every /admin/oauth/access_token response.
+type tokenResponse struct {
+	AccessToken string `json:"access_token"`
+	Scope       string `json:"scope"`
+	ExpiresIn   int    `json:"expires_in"` // seconds; 0 if not present (offline token)
+	Error       string `json:"error"`
+	ErrorDesc   string `json:"error_description"`
+}
 
+func parseTokenResponse(resp *http.Response) (*tokenResponse, error) {
+	defer resp.Body.Close()
+	var r tokenResponse
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+	if r.Error != "" {
+		if r.ErrorDesc != "" {
+			return nil, fmt.Errorf("%s: %s", r.Error, r.ErrorDesc)
+		}
+		return nil, fmt.Errorf("%s", r.Error)
+	}
+	if r.AccessToken == "" {
+		return nil, fmt.Errorf("empty access token in response (HTTP %d)", resp.StatusCode)
+	}
+	return &r, nil
+}
+
+// exchangeAuthCode exchanges a Shopify OAuth authorization code for an access token.
+func exchangeAuthCode(shop, clientID, clientSecret, code string) (*tokenResponse, error) {
+	endpoint := fmt.Sprintf("https://%s/admin/oauth/access_token", shop)
 	form := url.Values{}
 	form.Set("client_id", clientID)
 	form.Set("client_secret", clientSecret)
 	form.Set("code", code)
-
 	resp, err := http.PostForm(endpoint, form)
 	if err != nil {
-		return "", fmt.Errorf("POST %s: %w", endpoint, err)
+		return nil, fmt.Errorf("POST %s: %w", endpoint, err)
 	}
-	defer resp.Body.Close()
+	return parseTokenResponse(resp)
+}
 
-	var result struct {
-		AccessToken string `json:"access_token"`
-		Scope       string `json:"scope"`
-		Error       string `json:"error"`
-		ErrorDesc   string `json:"error_description"`
+// ClientCredentialsGrant obtains an access token directly from client credentials
+// (no user interaction required). Tokens last ~24 h (expires_in: 86399).
+// Exported so root.go can call it for auto-refresh.
+func ClientCredentialsGrant(shop, clientID, clientSecret string) (*tokenResponse, error) {
+	if !strings.Contains(shop, ".") {
+		shop = shop + ".myshopify.com"
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("parsing response: %w", err)
+	endpoint := fmt.Sprintf("https://%s/admin/oauth/access_token", shop)
+	form := url.Values{}
+	form.Set("client_id", clientID)
+	form.Set("client_secret", clientSecret)
+	form.Set("grant_type", "client_credentials")
+	resp, err := http.PostForm(endpoint, form)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s: %w", endpoint, err)
 	}
-	if result.Error != "" {
-		if result.ErrorDesc != "" {
-			return "", fmt.Errorf("%s: %s", result.Error, result.ErrorDesc)
-		}
-		return "", fmt.Errorf("%s", result.Error)
-	}
-	if result.AccessToken == "" {
-		return "", fmt.Errorf("empty access token in response (HTTP %d)", resp.StatusCode)
-	}
-	return result.AccessToken, nil
+	return parseTokenResponse(resp)
 }
 
 // openBrowser opens the given URL in the user's default browser.

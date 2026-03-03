@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/the20100/shopify-admin-cli/internal/api"
@@ -109,6 +110,8 @@ func resolveEnv(names ...string) string {
 }
 
 // resolveCredentials returns the shop domain and access token from env or config.
+// If client credentials are configured and the stored token is missing or
+// about to expire, it transparently refreshes via the Client Credentials Grant.
 func resolveCredentials() (string, string, error) {
 	// 1. Env vars (try all aliases)
 	envToken := resolveEnv(
@@ -129,10 +132,29 @@ func resolveCredentials() (string, string, error) {
 	if err != nil {
 		return "", "", fmt.Errorf("failed to load config: %w", err)
 	}
+
+	// 3. Auto-refresh via Client Credentials Grant when possible.
+	//    Triggered when: token is missing, or it expires within 5 minutes.
+	if cfg.ClientID != "" && cfg.ClientSecret != "" && cfg.Shop != "" {
+		needsRefresh := cfg.AccessToken == "" ||
+			(cfg.TokenExpiresAt > 0 && time.Now().Unix() >= cfg.TokenExpiresAt-300)
+		if needsRefresh {
+			tr, err := ClientCredentialsGrant(cfg.Shop, cfg.ClientID, cfg.ClientSecret)
+			if err != nil {
+				return "", "", fmt.Errorf("auto-refreshing token: %w", err)
+			}
+			cfg.AccessToken = tr.AccessToken
+			if tr.ExpiresIn > 0 {
+				cfg.TokenExpiresAt = time.Now().Unix() + int64(tr.ExpiresIn)
+			}
+			_ = config.Save(cfg) // best-effort; don't fail if save fails
+		}
+	}
+
 	if cfg.Shop != "" && cfg.AccessToken != "" {
 		return cfg.Shop, cfg.AccessToken, nil
 	}
-	return "", "", fmt.Errorf("not authenticated — run: shopify-admin auth setup <shop> <access-token>\nor set SHOPIFY_SHOP and SHOPIFY_ACCESS_TOKEN env vars")
+	return "", "", fmt.Errorf("not authenticated\n\nOption A (OAuth, recommended):\n  shopify-admin auth configure <client-id> <client-secret>\n  shopify-admin auth login --shop <shop> --no-browser\n\nOption B (manual token):\n  shopify-admin auth setup <shop> <access-token>")
 }
 
 func isAuthCommand(cmd *cobra.Command) bool {
