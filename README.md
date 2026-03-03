@@ -270,6 +270,31 @@ shopify-admin markets get <id>
 
 ---
 
+### `ltv`
+
+Calculate the store's Lifetime Value for a given period.
+
+**Formula:** `LTV = (net_sales − tax) ÷ unique paying customers`
+
+Default: last 3 years, excluding the last 3 months.
+
+```bash
+shopify-admin ltv                                    # default
+shopify-admin ltv --period 2y --exclude 0            # 2 years up to today
+shopify-admin ltv --period 18m --exclude 1           # 18 months, excl. last month
+shopify-admin ltv --start 2022-01-01 --end 2024-01-01
+shopify-admin ltv --json
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--start YYYY-MM-DD` | computed | Start date — overrides `--period` |
+| `--end YYYY-MM-DD` | today − exclude | End date |
+| `--period <N>` | `3y` | Look-back duration: `Ny`, `Nm`, `Nd` |
+| `--exclude <N>` | `3` | Skip last N months from end (0 = up to today) |
+
+---
+
 ### `update` — Self-update
 
 Pull the latest source from GitHub, rebuild, and replace the current binary.
