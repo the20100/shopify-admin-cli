@@ -21,6 +21,15 @@ func (c *Client) RunShopifyQL(query string) (*ShopifyQLResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	if DebugMode {
+		var pretty any
+		if json.Unmarshal(resp.Data, &pretty) == nil {
+			b, _ := json.MarshalIndent(pretty, "", "  ")
+			debugf("shopifyqlQuery raw response:\n%s", string(b))
+		} else {
+			debugf("shopifyqlQuery raw response (unparseable):\n%s", string(resp.Data))
+		}
+	}
 	var data struct {
 		ShopifyqlQuery ShopifyQLResult `json:"shopifyqlQuery"`
 	}

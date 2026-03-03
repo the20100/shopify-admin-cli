@@ -1,6 +1,19 @@
 package api
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+)
+
+// DebugMode enables raw response logging to stderr.
+var DebugMode bool
+
+func debugf(format string, args ...any) {
+	if DebugMode {
+		fmt.Fprintf(os.Stderr, "[debug] "+format+"\n", args...)
+	}
+}
 
 // ---- GraphQL envelope ----
 

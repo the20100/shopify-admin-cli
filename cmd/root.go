@@ -15,6 +15,7 @@ import (
 var (
 	jsonFlag   bool
 	prettyFlag bool
+	debugFlag  bool
 	client     *api.Client
 	cfg        *config.Config
 )
@@ -48,8 +49,10 @@ func Execute() {
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonFlag, "json", false, "Force JSON output")
 	rootCmd.PersistentFlags().BoolVar(&prettyFlag, "pretty", false, "Force pretty-printed JSON output (implies --json)")
+	rootCmd.PersistentFlags().BoolVar(&debugFlag, "debug", false, "Print raw API responses to stderr")
 
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		api.DebugMode = debugFlag
 		noAuthCommands := map[string]bool{"info": true, "search-syntax": true, "completion": true, "help": true}
 		if isAuthCommand(cmd) || noAuthCommands[cmd.Name()] {
 			return nil
