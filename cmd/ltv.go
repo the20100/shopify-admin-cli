@@ -170,14 +170,7 @@ func ltvQueryCustomers(start, end string) (int64, error) {
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 func qlErrors(res *api.ShopifyQLResult) string {
-	if len(res.ParseErrors) == 0 {
-		return ""
-	}
-	msgs := make([]string, len(res.ParseErrors))
-	for i, e := range res.ParseErrors {
-		msgs[i] = fmt.Sprintf("[%s] %s", e.Code, e.Message)
-	}
-	return strings.Join(msgs, "; ")
+	return strings.TrimSpace(res.ParseErrors)
 }
 
 // qlFloat finds a column by partial name match and returns its value as float64.

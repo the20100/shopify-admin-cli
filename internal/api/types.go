@@ -544,17 +544,12 @@ type MarketConnection struct {
 // ---- Analytics ----
 
 type ShopifyQLResult struct {
-	ParseErrors []ShopifyQLError `json:"parseErrors"`
-	TableData   *ShopifyQLTable  `json:"tableData"`
-}
-
-type ShopifyQLError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	ParseErrors string          `json:"parseErrors"`
+	TableData   *ShopifyQLTable `json:"tableData"`
 }
 
 type ShopifyQLTable struct {
-	Columns []ShopifyQLColumn `json:"columnDefinitions"`
+	Columns []ShopifyQLColumn `json:"columns"`
 	Rows    [][]string        `json:"rows"`
 }
 

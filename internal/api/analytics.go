@@ -10,9 +10,9 @@ func (c *Client) RunShopifyQL(query string) (*ShopifyQLResult, error) {
 	const gql = `
 		query shopifyqlQuery($query: String!) {
 			shopifyqlQuery(query: $query) {
-				parseErrors { code message }
+				parseErrors
 				tableData {
-					columnDefinitions { name dataType displayName }
+					columns { name dataType displayName }
 					rows
 				}
 			}

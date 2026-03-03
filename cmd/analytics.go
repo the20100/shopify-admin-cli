@@ -35,12 +35,8 @@ Examples:
 		if err != nil {
 			return err
 		}
-		if len(result.ParseErrors) > 0 {
-			msgs := make([]string, len(result.ParseErrors))
-			for i, e := range result.ParseErrors {
-				msgs[i] = fmt.Sprintf("[%s] %s", e.Code, e.Message)
-			}
-			return fmt.Errorf("ShopifyQL parse errors: %s", strings.Join(msgs, "; "))
+		if errStr := strings.TrimSpace(result.ParseErrors); errStr != "" {
+			return fmt.Errorf("ShopifyQL parse errors: %s", errStr)
 		}
 		if output.IsJSON(cmd) {
 			return output.PrintJSON(result, output.IsPretty(cmd))
