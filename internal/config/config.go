@@ -9,8 +9,10 @@ import (
 
 // Config holds the persisted user configuration.
 type Config struct {
-	Shop        string `json:"shop"`
-	AccessToken string `json:"access_token"`
+	Shop         string `json:"shop"`
+	AccessToken  string `json:"access_token"`
+	ClientID     string `json:"client_id,omitempty"`
+	ClientSecret string `json:"client_secret,omitempty"`
 }
 
 func configPath() (string, error) {
